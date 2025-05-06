@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Optimización de Ruta - Hill Climbing</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+
+  <script>
+    let mapa;
+    let marcadores = [];
+    let polilinea;
+
+    async function cargarEstados() {
+      const res = await fetch('/api/estados');
+      const estados = await res.json();
+      const lista = document.getElementById('lista_estados');
+      lista.innerHTML = '';
+      for (const [nombre, coord] of Object.entries(estados)) {
+        const item = document.createElement('div');
+        item.className = "flex justify-between items-center bg-white shadow p-4 rounded-xl mb-3 transition-all transform hover:scale-105 animate-fade-in";
+        item.innerHTML = `
+          <div>
+            <h3 class="font-bold text-gray-800 text-lg">${nombre}</h3>
+            <p class="text-gray-500 text-sm">(${coord[0]}, ${coord[1]})</p>
+          </div>
+          <button class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded shadow" onclick="confirmarEliminar('${nombre}')">
+            Eliminar
+          </button>
+        `;
+        lista.appendChild(item);
+      }
+    }
+
+    async function agregarEstado() {
+      const nombre = document.getElementById('nombre').value.trim();
+      const coordenadas = document.getElementById('coordenadas').value.trim();
+      if (!nombre || !coordenadas) {
+        alert('Por favor completa ambos campos.');
+        return;
+      }
+      await fetch('/api/estados', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nombre, coordenadas })
+      });
+      document.getElementById('nombre').value = '';
+      document.getElementById('coordenadas').value = '';
+      cargarEstados();
+    }
+
+    function confirmarEliminar(nombre) {
+      const modal = document.getElementById('modal');
+      const modalEstado = document.getElementById('modal_estado');
+      modalEstado.innerText = nombre;
+      modal.dataset.estado = nombre;
+      modal.classList.remove('hidden');
+    }
+
+    async function eliminarEstado() {
+      const modal = document.getElementById('modal');
+      const nombre = modal.dataset.estado;
+      await fetch(`/api/estados/${nombre}`, { method: 'DELETE' });
+      modal.classList.add('hidden');
+      cargarEstados();
+    }
+
+    function cerrarModal() {
+      document.getElementById('modal').classList.add('hidden');
+    }
+
+    async function calcularRuta() {
+      const rutaDiv = document.getElementById('ruta');
+      rutaDiv.classList.remove('opacity-100');
+      rutaDiv.classList.add('opacity-0');
+
+      const res = await fetch('/api/ruta');
+      const data = await res.json();
+      const ruta = data.ruta;
+      const distancia = data.distancia_total;
+
+      if (ruta.length === 0) {
+        rutaDiv.innerHTML = `<p class="text-red-500 font-semibold text-lg">Agrega al menos dos estados para calcular una ruta.</p>`;
+      } else {
+        rutaDiv.innerHTML = `
+          <h3 class="text-3xl font-bold text-green-600 mb-6 animate-fade-in">Mejor Ruta Encontrada</h3>
+          <div class="flex flex-wrap justify-center gap-6 mb-6 animate-fade-in">
+            ${ruta.map((estado, index) => `
+              <div class="flex items-center">
+                <div class="bg-indigo-500 text-white font-bold px-6 py-3 rounded-full shadow-lg text-center transition hover:scale-110">
+                  ${index + 1}. ${estado}
+                </div>
+                ${index !== ruta.length - 1 ? '<div class="mx-2 text-gray-400 text-2xl">➔</div>' : ''}
+              </div>
+            `).join('')}
+          </div>
+          <h4 class="text-2xl text-gray-700">Distancia Total: <span class="text-indigo-600">${distancia.toFixed(2)} unidades</span></h4>
+        `;
+      }
+
+      await actualizarMapa(ruta);
+      setTimeout(() => {
+        rutaDiv.classList.remove('opacity-0');
+        rutaDiv.classList.add('opacity-100');
+      }, 100);
+    }
+
+    async function actualizarMapa(rutaOrdenada) {
+      const res = await fetch('/api/estados');
+      const estados = await res.json();
+
+      marcadores.forEach(m => mapa.removeLayer(m));
+      if (polilinea) mapa.removeLayer(polilinea);
+      marcadores = [];
+
+      const coordenadasRuta = [];
+
+      rutaOrdenada.forEach((nombre, index) => {
+        const [lat, lng] = estados[nombre];
+        const marker = L.marker([lat, lng], {
+          icon: L.divIcon({
+            className: 'custom-icon',
+            html: `<div class="bg-indigo-600 text-white rounded-full w-10 h-10 flex items-center justify-center text-lg font-bold shadow-lg">${index + 1}</div>`,
+            iconSize: [40, 40]
+          })
+        }).addTo(mapa).bindPopup(`<b>${index + 1}. ${nombre}</b>`);
+        marcadores.push(marker);
+        coordenadasRuta.push([lat, lng]);
+      });
+
+      if (coordenadasRuta.length > 1) {
+        coordenadasRuta.push(coordenadasRuta[0]);
+        polilinea = L.polyline(coordenadasRuta, { color: 'blue', weight: 5 }).addTo(mapa);
+        mapa.fitBounds(polilinea.getBounds(), { padding: [50, 50] });
+      }
+    }
+
+    window.onload = function() {
+      cargarEstados();
+      mapa = L.map('map').setView([19.4326, -99.1332], 5);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+      }).addTo(mapa);
+    };
+  </script>
+
+  <style>
+    #ruta {
+      transition: all 0.8s ease;
+    }
+    #map {
+      height: 500px;
+      width: 100%;
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.2);
+    }
+    .animate-fade-in {
+      animation: fadeIn 1s ease forwards;
+    }
+    @keyframes fadeIn {
+      0% { opacity: 0; transform: translateY(20px); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+
+<body class="bg-gradient-to-tr from-indigo-100 via-purple-100 to-white min-h-screen p-10 flex flex-col items-center">
+
+  <header class="w-full max-w-7xl text-center mb-12">
+    <h1 class="text-5xl md:text-6xl font-extrabold text-indigo-700 drop-shadow-lg mb-4 animate-fade-in">Optimización de Rutas</h1>
+    <p class="text-xl text-gray-600 animate-fade-in">Algoritmo Hill Climbing + Mapa Dinámico</p>
+  </header>
+
+  <main class="w-full max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-6 p-4">
+
+    <!-- Sección Izquierda (1/3) -->
+    <section class="col-span-1 flex flex-col gap-6">
+  
+      <!-- Formulario para agregar estado -->
+      <div class="bg-white p-6 rounded-2xl shadow-lg animate-fade-in space-y-4">
+        <h2 class="text-2xl font-bold text-gray-800">Agregar Estado</h2>
+        <input type="text" id="nombre" placeholder="Nombre del Estado" class="w-full p-3 border rounded-xl focus:ring-2 focus:ring-indigo-400">
+        <input type="text" id="coordenadas" placeholder="Latitud, Longitud" class="w-full p-3 border rounded-xl focus:ring-2 focus:ring-indigo-400">
+        <button onclick="agregarEstado()" class="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-3 rounded-xl shadow-md transition hover:scale-105">
+          Agregar Estado
+        </button>
+      </div>
+  
+      <!-- Lista de estados con scroll -->
+      <div class="bg-white p-6 rounded-2xl shadow-lg animate-fade-in">
+        <h2 class="text-2xl font-bold text-gray-800 mb-4">Estados Registrados</h2>
+        <div id="lista_estados" class="max-h-64 overflow-y-auto flex flex-col space-y-3 pr-2 custom-scrollbar">
+          <!-- Estados dinámicos -->
+        </div>
+      </div>
+  
+      <!-- Botón calcular ruta -->
+      <div class="flex justify-center">
+        <button onclick="calcularRuta()" class="bg-green-500 hover:bg-green-600 text-white font-bold px-8 py-4 rounded-full shadow-xl transition hover:scale-105">
+          Calcular Mejor Ruta
+        </button>
+      </div>
+  
+    </section>
+  
+    <!-- Sección Derecha (2/3) -->
+    <section class="col-span-2 flex flex-col gap-6">
+
+        <!-- Resultados -->
+      <div id="ruta" class="text-center bg-white p-6 rounded-3xl shadow-2xl opacity-0 animate-fade-in"></div>
+  
+      <!-- Mapa -->
+      <div id="map" class="h-[600px] w-full rounded-3xl shadow-2xl animate-fade-in"></div>
+  
+      
+  
+    </section>
+  
+  </main>
+  
+
+  <div id="modal" class="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center hidden z-50">
+    <div class="bg-white p-10 rounded-2xl shadow-2xl text-center space-y-6">
+      <h2 class="text-2xl font-bold text-gray-800">¿Eliminar estado?</h2>
+      <p class="text-gray-600">¿Seguro que quieres eliminar <span id="modal_estado" class="font-bold"></span>?</p>
+      <div class="flex justify-center gap-6">
+        <button onclick="eliminarEstado()" class="bg-red-500 hover:bg-red-600 text-white font-bold px-6 py-3 rounded-lg">Eliminar</button>
+        <button onclick="cerrarModal()" class="bg-gray-300 hover:bg-gray-400 font-bold px-6 py-3 rounded-lg">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>
